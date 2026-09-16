@@ -36,7 +36,7 @@ jobs:
           restore-keys: oca-state-
 
       - name: Surveiller (chaque minute pendant ~5h50)
-        run: timeout 350m npx tsx src/cli.ts --interval 60 --github-issue --heartbeat 60 || [ $? -eq 124 ]
+        run: timeout 350m npx tsx cli.ts --interval 60 --github-issue --heartbeat 60 || [ $? -eq 124 ]
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GITHUB_TOKEN: ${{ github.token }}
