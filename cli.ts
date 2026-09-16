@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
 import { fetchAllSlots, type Slot } from "./scraper.js";
-import { buildMail, sendMail, notifyTermux, notifyNtfy, notifyGithubIssue } from "./notifier.js";
+import { buildMail, sendMail, notifyTermux, notifyNtfy, notifyGithubIssue, sendNtfy } from "./notifier.js";
 
 try {
   process.loadEnvFile();
@@ -25,6 +25,7 @@ const { values: opt } = parseArgs({
     "test-email": { type: "boolean", default: false },
     termux: { type: "boolean", default: false },
     "github-issue": { type: "boolean", default: false },
+    heartbeat: { type: "string" },
     "mail-to": { type: "string", short: "m", multiple: true },
     "mail-cmd": { type: "string", default: "sendmail -t -oi" },
     help: { type: "boolean", short: "h", default: false },
@@ -44,6 +45,7 @@ Options:
       --state <fichier>    Fichier d'état anti-doublon (défaut .oca-state.json)
   -m, --mail-to <email>    Destinataire email (répétable) ; envoi via la commande locale
       --mail-cmd <cmd>     Commande d'envoi lisant le mail sur stdin (défaut "sendmail -t -oi")
+      --heartbeat <min>    Envoie un message ntfy discret toutes les <min> minutes pour confirmer que ça tourne
       --github-issue       Ouvre une issue GitHub (email + notif app GitHub) – dans GitHub Actions
       --termux             Notification Android locale (Termux:API)
       --test-email         Envoie une alerte de test sur tous les canaux configurés`);
@@ -63,16 +65,20 @@ async function loadState(): Promise<Set<string>> {
 }
 const saveState = (s: Set<string>) => writeFile(opt.state!, JSON.stringify([...s], null, 2));
 
-async function check(): Promise<void> {
+async function check(): Promise<string> {
   let slots = await fetchAllSlots(opt.url!);
   if (opt.filter) slots = slots.filter((s) => s.date.includes(opt.filter!));
   if (slots.length === 0) {
-    log("⚠️  Aucun créneau trouvé : la structure de la page a peut-être changé.");
-    return;
+    const msg = "⚠️ Aucun créneau trouvé : la structure de la page a peut-être changé.";
+    log(msg);
+    throw new Error(msg);
   }
 
   const counts = slots.reduce<Record<string, number>>((a, s) => ((a[s.status] = (a[s.status] ?? 0) + 1), a), {});
-  log(`${slots.length} créneaux –`, Object.entries(counts).map(([k, v]) => `${ICON[k as Slot["status"]]} ${k}:${v}`).join("  "));
+  const summary = `${slots.length} créneaux – ${Object.entries(counts)
+    .map(([k, v]) => `${ICON[k as Slot["status"]]} ${k}:${v}`)
+    .join("  ")}`;
+  log(summary);
 
   const wanted = (s: Slot) => s.status === "OPEN" || (opt["notify-unknown"] && s.status === "UNKNOWN");
   const notified = await loadState();
@@ -89,6 +95,41 @@ async function check(): Promise<void> {
     toNotify.forEach((s) => notified.add(s.slug));
   }
   await saveState(notified);
+  return summary;
+}
+
+// --- Heartbeat : message ntfy discret pour confirmer que le watcher tourne ---
+const hb = { last: 0, checks: 0, errors: 0, lastSummary: "", lastError: "" };
+
+async function heartbeat(force = false) {
+  const every = Number(opt.heartbeat) * 60_000;
+  if (!opt.heartbeat || !process.env.NTFY_TOPIC) return;
+  if (!force && Date.now() - hb.last < every) return;
+  const failing = hb.checks > 0 && hb.errors === hb.checks;
+  const lines = [
+    `${hb.checks} vérification(s), ${hb.errors} erreur(s) depuis le dernier point`,
+    hb.lastSummary && `Dernier état : ${hb.lastSummary}`,
+    hb.lastError && `Dernière erreur : ${hb.lastError}`,
+    process.env.GITHUB_RUN_ID && `Run GitHub #${process.env.GITHUB_RUN_NUMBER}`,
+  ].filter(Boolean);
+  try {
+    await sendNtfy({
+      title: hb.checks === 0 ? "OCA watcher démarré" : failing ? "OCA watcher : erreurs" : "OCA watcher OK",
+      message:
+        hb.checks === 0
+          ? `Vérification toutes les ${opt.interval}s, point toutes les ${opt.heartbeat} min`
+          : lines.join("\n"),
+      priority: failing ? 4 : 2, // 2 = silencieux ; 4 = visible si tout échoue
+      tags: [failing ? "warning" : "white_check_mark"],
+      click: opt.url,
+    });
+    log("💓 Heartbeat envoyé");
+  } catch (e) {
+    log("❌ Heartbeat :", e instanceof Error ? e.message : e);
+  }
+  hb.last = Date.now();
+  hb.checks = hb.errors = 0;
+  hb.lastError = "";
 }
 
 async function alert(mail: ReturnType<typeof buildMail>, url: string, slots: Slot[] = []) {
@@ -123,13 +164,18 @@ async function main() {
   });
 
   log(`Surveillance de ${opt.url}${opt.once ? "" : ` toutes les ${intervalMs / 1000}s`}`);
+  if (!opt.once) await heartbeat(true);
   do {
+    hb.checks++;
     try {
-      await check();
+      hb.lastSummary = await check();
     } catch (e) {
-      log("❌", e instanceof Error ? e.message : e);
+      hb.errors++;
+      hb.lastError = e instanceof Error ? e.message : String(e);
+      log("❌", hb.lastError);
       if (opt.once) process.exitCode = 1;
     }
+    if (!opt.once) await heartbeat();
     if (opt.once) break;
     // petit jitter pour ne pas taper le serveur à heure fixe
     await new Promise((r) => setTimeout(r, intervalMs + Math.random() * 10_000));
