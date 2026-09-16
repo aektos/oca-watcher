@@ -49,7 +49,7 @@ jobs:
           key: oca-state-${{ github.run_id }}
 
       - name: Se relancer (jusqu'à la fin des JEP)
-        if: always()
+        if: success()   # pas de relance si échec ou annulation
         env:
           GH_TOKEN: ${{ github.token }}
           STOP_AT: "2026-09-20T17:00:00+02:00"
