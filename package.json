@@ -1,0 +1,20 @@
+{
+  "name": "oca-watcher",
+  "version": "1.0.0",
+  "description": "Surveille les visites OCA (JEP Nice) et envoie un email dès qu'une place se libère",
+  "type": "module",
+  "bin": { "oca-watcher": "dist/cli.js" },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "once": "tsx src/cli.ts --once",
+    "test-email": "tsx src/cli.ts --test-email",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": { "node": ">=20.12" },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
