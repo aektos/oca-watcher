@@ -85,25 +85,36 @@ export async function notifyTermux(mail: Mail, url: string): Promise<void> {
 }
 
 /** Push vers l'app ntfy (https://ntfy.sh) : arrive même téléphone en veille. */
-export async function notifyNtfy(mail: Mail, url: string): Promise<void> {
+export interface NtfyMessage {
+  title: string;
+  message: string;
+  priority?: 1 | 2 | 3 | 4 | 5;
+  tags?: string[];
+  click?: string;
+  actions?: { action: "view"; label: string; url: string }[];
+}
+
+export async function sendNtfy(msg: NtfyMessage): Promise<void> {
   const topic = process.env.NTFY_TOPIC;
   if (!topic) throw new Error("NTFY_TOPIC manquant");
   const server = process.env.NTFY_SERVER || "https://ntfy.sh";
   const res = await fetch(server, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      topic,
-      title: "Place OCA disponible !",
-      message: mail.text,
-      priority: 5, // urgent : sonne même en mode silencieux si autorisé dans l'app
-      tags: ["telescope", "rotating_light"],
-      click: url,
-      actions: [{ action: "view", label: "Réserver", url }],
-    }),
+    body: JSON.stringify({ topic, ...msg }),
   });
   if (!res.ok) throw new Error(`ntfy ${res.status}: ${await res.text()}`);
 }
+
+export const notifyNtfy = (mail: Mail, url: string) =>
+  sendNtfy({
+    title: "Place OCA disponible !",
+    message: mail.text,
+    priority: 5, // urgent : sonne même en mode silencieux si autorisé dans l'app
+    tags: ["telescope", "rotating_light"],
+    click: url,
+    actions: [{ action: "view", label: "Réserver", url }],
+  });
 
 /**
  * Ouvre une issue GitHub qui mentionne le propriétaire du dépôt :
